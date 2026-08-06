@@ -52,6 +52,17 @@ export default function Ventas() {
   // Ref para Foco Rápido en el Input de Cantidad
   const cantidadInputRef = useRef(null);
 
+  // Autofocus y Selección Automática (.select()) para el modal de Ingresar Cantidad
+  useEffect(() => {
+    if (productoAConstruir && cantidadInputRef.current) {
+      const timer = setTimeout(() => {
+        cantidadInputRef.current?.focus();
+        cantidadInputRef.current?.select();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [productoAConstruir]);
+
   // Modal Checkout
   const [modalCheckoutOpen, setModalCheckoutOpen] = useState(false);
   const [isSubmittingVenta, setIsSubmittingVenta] = useState(false);
@@ -994,6 +1005,8 @@ export default function Ventas() {
                 <input
                   ref={cantidadInputRef}
                   type="number"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   min="1"
                   value={cantidadInput}
                   onChange={(e) => setCantidadInput(e.target.value)}
