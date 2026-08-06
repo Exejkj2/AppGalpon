@@ -50,7 +50,7 @@ export default function DashboardLayout() {
             to={item.to}
             onClick={() => setIsSidebarOpen(false)}
             className={({ isActive }) => `
-              flex items-center gap-4 px-4 py-3 rounded-lg transition-colors
+              ${item.to === '/compras' ? 'hidden md:flex' : 'flex'} items-center gap-4 px-4 py-3 rounded-lg transition-colors
               ${isActive 
                 ? 'bg-blue-50 text-blue-700 font-semibold' 
                 : 'text-gray-600 hover:bg-gray-100 font-medium'}
