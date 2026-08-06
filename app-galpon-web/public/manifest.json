@@ -1,0 +1,32 @@
+{
+  "short_name": "TodoGolosinas",
+  "name": "Todo Golosinas - App Galpón",
+  "description": "Sistema de Gestión, Ventas y Control de Galpón para Todo Golosinas",
+  "icons": [
+    {
+      "src": "pwa-192x192.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "pwa-512x512.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    }
+  ],
+  "start_url": "./",
+  "background_color": "#4f46e5",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "./",
+  "lang": "es-AR"
+}
