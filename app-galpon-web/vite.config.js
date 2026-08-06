@@ -5,4 +5,16 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: './',
+  workbox: {
+    runtimeCaching: [
+      {
+        // Ignorar el caché para cualquier llamada a la API de Supabase
+        urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+        handler: 'NetworkOnly',
+        options: {
+          cacheName: 'supabase-api-bypass',
+        }
+      }
+    ]
+  }
 })

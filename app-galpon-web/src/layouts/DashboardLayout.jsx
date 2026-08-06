@@ -11,7 +11,8 @@ import {
   LogOut, 
   Menu, 
   X,
-  Candy
+  Candy,
+  FileText
 } from 'lucide-react';
 
 export default function DashboardLayout() {
@@ -28,6 +29,7 @@ export default function DashboardLayout() {
     { to: '/ventas', icon: ShoppingCart, label: 'Ventas' },
     { to: '/consultas', icon: LineChart, label: 'Consulta de Ventas' },
     { to: '/compras', icon: Truck, label: 'Compras' },
+    { to: '/historial-compras', icon: FileText, label: 'Historial de Compras' },
   ];
 
   const SidebarContent = () => (

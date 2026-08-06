@@ -10,6 +10,7 @@ import Clientes from './pages/Clientes';
 import Ventas from './pages/Ventas';
 import Consultas from './pages/Consultas';
 import Compras from './pages/Compras';
+import HistorialCompras from './pages/HistorialCompras';
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
           <Route path="/ventas" element={<Ventas />} />
           <Route path="/consultas" element={<Consultas />} />
           <Route path="/compras" element={<Compras />} />
+          <Route path="/historial-compras" element={<HistorialCompras />} />
         </Route>
 
         {/* Redirección por defecto */}
