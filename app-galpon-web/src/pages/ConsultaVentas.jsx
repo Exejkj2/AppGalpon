@@ -12,23 +12,26 @@ import {
   DollarSign, 
   ShoppingBag, 
   Search,
-  Tag,
   Printer,
-  Send
+  Send,
+  Ban,
+  Receipt
 } from 'lucide-react';
 
 export default function ConsultaVentas() {
   const [ventas, setVentas] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Modal Detalle de Venta
+  // Venta Seleccionada y Detalle
   const [ventaSeleccionada, setVentaSeleccionada] = useState(null);
   const [detallesVenta, setDetallesVenta] = useState([]);
   const [loadingDetalles, setLoadingDetalles] = useState(false);
+  const [accionModal, setAccionModal] = useState(null); // 'cancelar' | 'imprimir' | 'reenviar' | null
 
-  // Cargar lista de ventas
+  // Cargar lista de ventas desde Supabase
   const fetchVentas = async () => {
     setLoading(true);
     setError(null);
@@ -53,7 +56,7 @@ export default function ConsultaVentas() {
     fetchVentas();
   }, []);
 
-  // Función para obtener un número correlativo limpio (#1, #2, #3...)
+  // Obtener un número correlativo limpio (#1, #2, #3...)
   const getNumeroCorrelativo = (ventaObj) => {
     if (!ventaObj) return '';
     if (typeof ventaObj.id === 'number' || (!isNaN(ventaObj.id) && !String(ventaObj.id).includes('-'))) {
@@ -66,7 +69,7 @@ export default function ConsultaVentas() {
     return 1;
   };
 
-  // Cargar detalles de una venta (usa la clave primaria real de la DB)
+  // Cargar detalles de una venta al hacer clic en la tarjeta
   const handleVerDetalle = async (venta) => {
     setVentaSeleccionada(venta);
     setLoadingDetalles(true);
@@ -88,12 +91,90 @@ export default function ConsultaVentas() {
     }
   };
 
-  const cerrarModalDetalle = () => {
-    setVentaSeleccionada(null);
-    setDetallesVenta([]);
+  // Paso 2: Centralizar la Confirmación del Modal Dinámico
+  const handleConfirmarAccion = () => {
+    if (accionModal === 'cancelar') {
+      ejecutarCancelacionVenta();
+    } else if (accionModal === 'imprimir') {
+      handleImprimirTicketModal();
+      setAccionModal(null);
+    } else if (accionModal === 'reenviar') {
+      handleReenviarMailModal();
+      setAccionModal(null);
+    }
   };
 
-  // Imprimir Ticket desde el Modal
+  // Abrir Modal de Confirmación
+  const handleCancelarVenta = () => {
+    if (!ventaSeleccionada) return;
+    setAccionModal('cancelar');
+  };
+
+  // Ejecutar Cancelación de Venta y Devolución de Stock en Supabase
+  const ejecutarCancelacionVenta = async () => {
+    if (!ventaSeleccionada) return;
+
+    setCargando(true);
+    try {
+      // 1. Obtenemos los productos de la venta para devolver el stock
+      let itemsVendidos = detallesVenta;
+      if (!itemsVendidos || itemsVendidos.length === 0) {
+        const { data: dData, error: dErr } = await supabase
+          .from('venta_detalles')
+          .select('*')
+          .eq('venta_id', ventaSeleccionada.id);
+
+        if (!dErr && dData) {
+          itemsVendidos = dData;
+        }
+      }
+
+      for (const item of (itemsVendidos || [])) {
+        const prodId = item.producto_id || item.productoId || item.id;
+        if (!prodId) continue;
+
+        // Obtenemos el stock actual del producto
+        const { data: productoActual } = await supabase
+          .from('productos')
+          .select('stockBultos, stock')
+          .eq('id', prodId)
+          .single();
+
+        if (productoActual) {
+          const stockActualNum = Number(productoActual.stockBultos !== undefined ? productoActual.stockBultos : (productoActual.stock || 0));
+          const nuevoStock = stockActualNum + Number(item.cantidad || 0);
+
+          // Sumamos la cantidad vendida de vuelta al stock
+          await supabase.from('productos')
+            .update({ stockBultos: nuevoStock })
+            .eq('id', prodId);
+        }
+      }
+
+      // 2. Marcar la venta como 'Cancelada' en la base de datos
+      const { error: errUpdateVenta } = await supabase
+        .from('ventas')
+        .update({ estado: 'Cancelada' })
+        .eq('id', ventaSeleccionada.id);
+
+      if (errUpdateVenta) throw errUpdateVenta;
+
+      toast.success('Venta cancelada exitosamente y stock restaurado.');
+
+      // 3. Actualizar la interfaz en tiempo real
+      const ventaActualizada = { ...ventaSeleccionada, estado: 'Cancelada' };
+      setVentaSeleccionada(ventaActualizada);
+      setVentas(ventas.map((v) => v.id === ventaSeleccionada.id ? { ...v, estado: 'Cancelada' } : v));
+    } catch (error) {
+      console.error('Error al cancelar venta:', error);
+      toast.error('Hubo un error al cancelar la venta.');
+    } finally {
+      setCargando(false);
+      setAccionModal(null);
+    }
+  };
+
+  // Imprimir Ticket térmico de 80mm
   const handleImprimirTicketModal = () => {
     if (!ventaSeleccionada) return;
     toast.success('Generando ticket térmico...', { id: 'modal-print-toast' });
@@ -102,7 +183,7 @@ export default function ConsultaVentas() {
     }, 300);
   };
 
-  // Reenviar por EmailJS desde el Modal
+  // Reenviar por EmailJS
   const handleReenviarMailModal = async () => {
     if (!ventaSeleccionada) return;
 
@@ -120,14 +201,13 @@ export default function ConsultaVentas() {
     mensajeCompleto += `Ticket N°: ${numCorrelativo}\n`;
     mensajeCompleto += `Fecha y Hora: ${fechaHora}\n`;
     mensajeCompleto += `Cliente: ${nombreCliente}\n`;
-    mensajeCompleto += `Vendedor / Caja: Caja Central\n`;
     mensajeCompleto += `-------------------------------------------------\n`;
 
     detallesVenta.forEach((item) => {
       const nombreProd = item.producto_nombre || item.nombre || 'Producto';
       const precioUnit = parseFloat(item.precio_unitario || item.precio || 0);
       mensajeCompleto += `${nombreProd}\n`;
-      mensajeCompleto += `Cantidad: ${item.cantidad} un. | P. Unitario: $${precioUnit.toLocaleString('es-AR')} | Subtotal: $${item.subtotal.toLocaleString('es-AR')}\n`;
+      mensajeCompleto += `Cantidad: ${item.cantidad} un. | P. Unitario: $${precioUnit.toLocaleString('es-AR')} | Subtotal: $${item.subtotal?.toLocaleString('es-AR')}\n`;
     });
 
     const subtotal = ventaSeleccionada.subtotal || 0;
@@ -141,7 +221,6 @@ export default function ConsultaVentas() {
     mensajeCompleto += `=================================\n`;
     mensajeCompleto += `TOTAL A PAGAR: $${total.toLocaleString('es-AR')}\n`;
     mensajeCompleto += `=================================\n`;
-    mensajeCompleto += `¡Gracias por su compra en Todo Golosinas!`;
 
     const templateParams = {
       to_email: destinatariosArray.join(', '),
@@ -177,7 +256,9 @@ export default function ConsultaVentas() {
 
   // Filtrado por cliente, fecha o ID correlativo/UUID
   const ventasFiltradas = ventas.filter((v) => {
-    const term = searchTerm.toLowerCase();
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return true;
+
     const nombreCliente = (v.clientes?.nombreCompleto || v.clientes?.nombre_completo || 'Consumidor Final').toLowerCase();
     const fecha = new Date(v.created_at).toLocaleDateString('es-AR').toLowerCase();
     const numCorrelativo = String(getNumeroCorrelativo(v));
@@ -192,8 +273,8 @@ export default function ConsultaVentas() {
   });
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Estilos CSS de Impresión Térmica (80mm POS) para Consulta de Ventas */}
+    <div className="max-w-7xl mx-auto flex flex-col h-[calc(100vh-2rem)] md:h-[calc(100vh-3.5rem)] overflow-hidden gap-4">
+      {/* Estilos CSS de Impresión Térmica (80mm POS) */}
       <style>{`
         @media print {
           body * {
@@ -219,7 +300,7 @@ export default function ConsultaVentas() {
         }
       `}</style>
 
-      {/* Ticket Térmico Oculto (Impresión desde Modal) */}
+      {/* Ticket Térmico Oculto para Impresión */}
       {ventaSeleccionada && (
         <div id="ticket-impresion-consulta" className="hidden print:block font-mono text-xs text-black">
           <div className="text-center font-bold text-sm uppercase mb-1">
@@ -269,324 +350,351 @@ export default function ConsultaVentas() {
               <span>${ventaSeleccionada.total?.toLocaleString('es-AR')}</span>
             </div>
           </div>
-
-          <div className="text-center text-[10px] border-t border-dashed border-black pt-2 uppercase">
-            ¡Muchas gracias por su compra!<br />
-            *** TODO GOLOSINAS ***
-          </div>
         </div>
       )}
 
-      {/* Header & Subtítulo */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Consulta de Ventas</h1>
-          <p className="text-slate-500 text-sm mt-1">Historial completo de transacciones y comprobantes registrados</p>
+      {/* Header General */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-gray-100 shrink-0">
+        <div className="flex items-center gap-3.5">
+          <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-md shadow-indigo-200 shrink-0">
+            <Receipt className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">Consulta de Ventas</h1>
+            <p className="text-slate-500 text-xs md:text-sm mt-0.5 font-medium">Historial completo de transacciones, comprobantes y anulación de ventas</p>
+          </div>
         </div>
       </div>
 
-      {/* Buscador */}
-      <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-          <Search className="h-5 w-5 text-gray-400" />
-        </div>
-        <input
-          type="text"
-          placeholder="Buscar por cliente, fecha o N° de comprobante..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="block w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-2xl text-gray-800 placeholder-gray-400 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm"
-        />
-      </div>
-
-      {/* Estado Carga / Error */}
+      {/* Estado Carga / Error General */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3">
-          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-          <p className="text-gray-500 font-medium text-sm">Cargando historial de ventas...</p>
+        <div className="flex-1 flex flex-col items-center justify-center py-20 gap-3 bg-white rounded-2xl border border-gray-100">
+          <Loader2 className="w-9 h-9 text-indigo-600 animate-spin" />
+          <p className="text-gray-500 font-medium text-xs md:text-sm">Cargando historial de ventas...</p>
         </div>
       ) : error ? (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-sm">
-          {error}
+        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-2xl text-xs md:text-sm flex items-center gap-2">
+          <span>{error}</span>
         </div>
       ) : (
-        <>
-          {/* Tabla de Ventas (Escritorio / Tablet) */}
-          <div className="hidden md:block bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100 text-xs uppercase tracking-wider text-gray-500 font-semibold">
-                    <th className="px-6 py-4">ID Venta</th>
-                    <th className="px-6 py-4">Fecha / Hora</th>
-                    <th className="px-6 py-4">Cliente</th>
-                    <th className="px-6 py-4 text-center">Descuento</th>
-                    <th className="px-6 py-4 text-right">Total</th>
-                    <th className="px-6 py-4 text-center">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 text-sm">
-                  {ventasFiltradas.length === 0 ? (
-                    <tr>
-                      <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
-                        No se encontraron ventas registradas.
-                      </td>
-                    </tr>
-                  ) : (
-                    ventasFiltradas.map((v) => {
-                      const clienteNombre = v.clientes?.nombreCompleto || v.clientes?.nombre_completo || 'Consumidor Final';
-                      const numCorrelativo = getNumeroCorrelativo(v);
-                      const fechaFormateada = new Date(v.created_at).toLocaleString('es-AR', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      });
-
-                      return (
-                        <tr key={v.id} className="hover:bg-slate-50/60 transition-colors">
-                          <td className="px-6 py-4 font-mono text-xs font-bold text-indigo-600">
-                            #{numCorrelativo}
-                          </td>
-                          <td className="px-6 py-4 text-slate-600 font-medium">
-                            <div className="flex items-center gap-2">
-                              <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-                              <span>{fechaFormateada}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 font-semibold text-slate-800 capitalize">
-                            <div className="flex items-center gap-2">
-                              <User className="w-4 h-4 text-indigo-500 shrink-0" />
-                              <span>{clienteNombre}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            {v.porcentaje_descuento || v.descuento ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                {v.porcentaje_descuento || v.descuento}% OFF
-                              </span>
-                            ) : (
-                              <span className="text-gray-400 text-xs">Sin desc.</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-right font-extrabold text-indigo-700 text-base">
-                            ${v.total?.toLocaleString('es-AR')}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <button
-                              onClick={() => handleVerDetalle(v)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl transition-colors"
-                            >
-                              <Eye className="w-4 h-4" />
-                              <span>Ver Detalle</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Tarjetas de Ventas (Móvil) */}
-          <div className="md:hidden space-y-3">
-            {ventasFiltradas.length === 0 ? (
-              <div className="bg-white p-6 rounded-2xl text-center text-gray-500 border border-gray-100 shadow-sm">
-                No se encontraron ventas registradas.
-              </div>
-            ) : (
-              ventasFiltradas.map((v) => {
-                const clienteNombre = v.clientes?.nombreCompleto || v.clientes?.nombre_completo || 'Consumidor Final';
-                const numCorrelativo = getNumeroCorrelativo(v);
-                const fechaFormateada = new Date(v.created_at).toLocaleString('es-AR', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                });
-
-                return (
-                  <div key={v.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-3">
-                    <div className="flex items-center justify-between border-b border-gray-100 pb-2">
-                      <span className="font-mono text-xs font-bold text-indigo-600">Venta #{numCorrelativo}</span>
-                      <span className="text-xs text-gray-400">{fechaFormateada}</span>
-                    </div>
-
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-xs text-gray-400 font-semibold uppercase">Cliente</p>
-                        <p className="font-bold text-slate-800 text-sm capitalize mt-0.5">{clienteNombre}</p>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-xs text-gray-400 font-semibold uppercase">Monto Total</p>
-                        <p className="font-extrabold text-indigo-700 text-base mt-0.5">${v.total?.toLocaleString('es-AR')}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                      {v.porcentaje_descuento || v.descuento ? (
-                        <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md">
-                          Desc: {v.porcentaje_descuento || v.descuento}%
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-400">Sin descuento</span>
-                      )}
-
-                      <button
-                        onClick={() => handleVerDetalle(v)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span>Ver Detalle</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Modal de Detalle de Venta */}
-      {ventaSeleccionada && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={cerrarModalDetalle}></div>
-
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh] z-10 animate-in fade-in zoom-in-95 duration-200">
-            {/* Header Modal */}
-            <div className="p-5 border-b border-gray-100 bg-slate-50 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-indigo-100 text-indigo-600 rounded-xl">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-800 text-base">
-                    Detalle de Venta #{getNumeroCorrelativo(ventaSeleccionada)}
-                  </h3>
-                  <p className="text-xs text-gray-500">
-                    {new Date(ventaSeleccionada.created_at).toLocaleString('es-AR')}
-                  </p>
-                </div>
-              </div>
-
-              <button onClick={cerrarModalDetalle} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-full">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Datos del Cliente */}
-            <div className="p-4 bg-indigo-50/50 border-b border-indigo-100 shrink-0 flex justify-between items-center text-xs">
-              <div>
-                <span className="text-gray-500 block uppercase font-semibold text-[10px]">Cliente</span>
-                <span className="font-bold text-slate-800 text-sm capitalize">
-                  {ventaSeleccionada.clientes?.nombreCompleto || ventaSeleccionada.clientes?.nombre_completo || 'Consumidor Final'}
+        /* Paso 3: Rediseño de Interfaz (Split Screen) */
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden items-stretch">
+          
+          {/* COLUMNA IZQUIERDA: Lista de Ventas (Ocupa 1/3) */}
+          <div className="lg:col-span-1 bg-white p-4 md:p-5 rounded-2xl border border-gray-100 shadow-sm flex flex-col h-full min-h-0 overflow-hidden">
+            <div className="border-b border-gray-100 pb-3 mb-3 shrink-0 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm md:text-base font-extrabold text-slate-800 uppercase tracking-wider">
+                  Historial ({ventasFiltradas.length})
+                </h3>
+                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-md">
+                  Últimas ventas
                 </span>
               </div>
 
-              {ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento ? (
-                <div className="text-right">
-                  <span className="text-emerald-600 font-bold bg-emerald-100 px-2 py-0.5 rounded-md">
-                    Descuento: {ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento}%
-                  </span>
-                </div>
-              ) : null}
+              {/* Buscador */}
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar cliente, fecha o N°..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-medium text-slate-800 placeholder-gray-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                />
+              </div>
             </div>
 
-            {/* Lista de Productos Comprados */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              <h4 className="font-bold text-slate-700 text-xs uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <ShoppingBag className="w-4 h-4 text-indigo-600" />
-                <span>Productos Comprados</span>
-              </h4>
-
-              {loadingDetalles ? (
-                <div className="flex flex-col items-center justify-center py-10 text-gray-400 gap-2">
-                  <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-                  <span className="text-xs">Cargando productos del detalle...</span>
+            {/* Lista Deslazable de Ventas con no-scrollbar */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-2.5 no-scrollbar min-h-0">
+              {ventasFiltradas.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 gap-2">
+                  <ShoppingBag className="w-8 h-8 text-gray-300" />
+                  <p className="text-xs font-semibold">No se encontraron ventas.</p>
                 </div>
-              ) : detallesVenta.length === 0 ? (
-                <p className="text-center py-8 text-gray-400 text-sm">No se encontraron productos en esta venta.</p>
               ) : (
-                <div className="divide-y divide-gray-100">
-                  {detallesVenta.map((det) => {
-                    const nombreProd = det.producto_nombre || det.nombre || 'Producto';
-                    const precioUnit = parseFloat(det.precio_unitario || det.precio || 0);
+                ventasFiltradas.map((v) => {
+                  const clienteNombre = v.clientes?.nombreCompleto || v.clientes?.nombre_completo || 'Consumidor Final';
+                  const numCorrelativo = getNumeroCorrelativo(v);
+                  const isSelected = ventaSeleccionada?.id === v.id;
+                  const isCancelada = v.estado === 'Cancelada';
 
-                    return (
-                      <div key={det.id} className="py-3 flex items-center justify-between gap-3 text-sm">
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-slate-800 capitalize">{nombreProd}</span>
-                          <span className="text-xs text-gray-400">
-                            Cant: <strong className="text-slate-700">{det.cantidad}</strong> x ${precioUnit.toLocaleString('es-AR')}
-                          </span>
+                  return (
+                    <div
+                      key={v.id}
+                      onClick={() => handleVerDetalle(v)}
+                      className={`p-3 rounded-xl cursor-pointer transition-all border ${
+                        isSelected
+                          ? 'bg-indigo-50/90 border-indigo-600 shadow-sm ring-1 ring-indigo-600/30'
+                          : 'bg-white border-gray-200 hover:border-indigo-300 hover:bg-slate-50/70'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-1.5">
+                        <div className="overflow-hidden pr-2">
+                          <p className="font-bold text-xs text-slate-800 capitalize truncate">{clienteNombre}</p>
+                          <p className="text-[11px] text-gray-400 font-mono mt-0.5">
+                            Ticket #{numCorrelativo} • {new Date(v.created_at).toLocaleDateString('es-AR')}
+                          </p>
                         </div>
 
-                        <div className="text-right shrink-0">
-                          <span className="font-bold text-indigo-700">
-                            ${det.subtotal?.toLocaleString('es-AR')}
-                          </span>
-                        </div>
+                        <span className={`text-[11px] font-black px-2 py-0.5 rounded-md shrink-0 ${
+                          isCancelada 
+                            ? 'bg-rose-100 text-rose-700 border border-rose-200' 
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        }`}>
+                          ${v.total?.toLocaleString('es-AR')}
+                        </span>
                       </div>
-                    );
-                  })}
-                </div>
+
+                      {isCancelada && (
+                        <span className="inline-block text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md mt-1">
+                          🚫 Venta Cancelada
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
-
-            {/* Pie del Modal: Resumen de Totales y Botones de Acción */}
-            <div className="p-5 border-t border-gray-100 bg-slate-50 shrink-0 space-y-3">
-              <div className="flex justify-between items-center text-xs text-slate-500">
-                <span>Subtotal Parcial:</span>
-                <span className="font-bold text-slate-700">${ventaSeleccionada.subtotal?.toLocaleString('es-AR')}</span>
-              </div>
-
-              {(ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento) > 0 && (
-                <div className="flex justify-between items-center text-xs text-emerald-600 font-semibold">
-                  <span>Descuento Aplicado ({ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento}%):</span>
-                  <span>-${(((ventaSeleccionada.subtotal || 0) * (ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento || 0)) / 100).toLocaleString('es-AR')}</span>
-                </div>
-              )}
-
-              <div className="flex justify-between items-center text-base pt-2 border-t border-gray-200">
-                <span className="font-bold text-slate-800">TOTAL FINAL:</span>
-                <span className="text-xl font-extrabold text-indigo-700">${ventaSeleccionada.total?.toLocaleString('es-AR')}</span>
-              </div>
-
-              {/* Botones de Acción (Imprimir y Reenviar Mail) */}
-              <div className="pt-2 grid grid-cols-2 gap-2">
-                <button
-                  onClick={handleImprimirTicketModal}
-                  className="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors shadow-sm"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>Imprimir Ticket</span>
-                </button>
-
-                <button
-                  onClick={handleReenviarMailModal}
-                  className="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors shadow-sm"
-                >
-                  <Send className="w-4 h-4" />
-                  <span>Reenviar por Mail</span>
-                </button>
-              </div>
-
-              <button
-                onClick={cerrarModalDetalle}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors"
-              >
-                Cerrar Detalle
-              </button>
-            </div>
-
           </div>
+
+          {/* COLUMNA DERECHA: Detalle de Venta (Ocupa 2/3) */}
+          <div className="lg:col-span-2 bg-white p-4 md:p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col h-full min-h-0 overflow-hidden">
+            {!ventaSeleccionada ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-3 border-2 border-dashed border-gray-100 rounded-2xl p-8">
+                <FileText className="w-12 h-12 text-gray-300" />
+                <p className="text-sm font-semibold text-slate-600">Selecciona una venta de la lista</p>
+                <p className="text-xs text-gray-400 text-center max-w-xs">
+                  Haz clic sobre cualquier ticket de la izquierda para desplegar el detalle completo, productos e imprimir o cancelar la venta.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Encabezado del Detalle */}
+                <div className="flex justify-between items-center pb-4 border-b border-gray-100 shrink-0">
+                  <div>
+                    <h2 className="text-lg md:text-xl font-black text-slate-800 flex items-center gap-2">
+                      Comprobante #{getNumeroCorrelativo(ventaSeleccionada)}
+                    </h2>
+                    <p className="text-xs md:text-sm text-slate-500 font-medium mt-0.5">
+                      Cliente: <span className="font-bold text-slate-800 capitalize">
+                        {ventaSeleccionada.clientes?.nombreCompleto || ventaSeleccionada.clientes?.nombre_completo || 'Consumidor Final'}
+                      </span>
+                      <span className="text-gray-400 font-mono ms-2">
+                        ({new Date(ventaSeleccionada.created_at).toLocaleString('es-AR')})
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-xl md:text-2xl font-black text-indigo-700">
+                      ${ventaSeleccionada.total?.toLocaleString('es-AR')}
+                    </p>
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md inline-block mt-0.5 ${
+                      ventaSeleccionada.estado === 'Cancelada' 
+                        ? 'text-rose-700 bg-rose-100 border border-rose-200' 
+                        : 'text-emerald-700 bg-emerald-100 border border-emerald-200'
+                    }`}>
+                      {ventaSeleccionada.estado || 'Completada'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Lista de Productos Vendidos (Scroll con no-scrollbar) */}
+                <div className="flex-1 overflow-y-auto no-scrollbar my-4 min-h-0 border border-gray-100 rounded-xl">
+                  {loadingDetalles ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-2 text-indigo-600">
+                      <Loader2 className="w-8 h-8 animate-spin" />
+                      <span className="text-xs text-gray-500 font-medium">Cargando productos de la venta...</span>
+                    </div>
+                  ) : (
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100 text-slate-500 uppercase font-bold text-[11px] sticky top-0 z-10">
+                          <th className="py-3 px-4">Producto</th>
+                          <th className="py-3 px-4 text-center">Cantidad</th>
+                          <th className="py-3 px-4 text-right">Precio Un.</th>
+                          <th className="py-3 px-4 text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {detallesVenta.length === 0 ? (
+                          <tr>
+                            <td colSpan="4" className="py-8 text-center text-gray-400">
+                              No hay detalle de artículos para esta venta.
+                            </td>
+                          </tr>
+                        ) : (
+                          detallesVenta.map((item, i) => {
+                            const nombreProd = item.producto_nombre || item.nombre || 'Producto';
+                            const precioUnit = parseFloat(item.precio_unitario || item.precio || 0);
+
+                            return (
+                              <tr key={i} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="py-3 px-4 font-bold text-slate-800 capitalize">
+                                  {nombreProd}
+                                </td>
+                                <td className="py-3 px-4 text-center">
+                                  <span className="inline-flex items-center px-2 py-0.5 bg-indigo-50 text-indigo-700 font-extrabold rounded-md text-xs border border-indigo-200">
+                                    {item.cantidad} u.
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-right text-slate-600 font-medium">
+                                  ${precioUnit.toLocaleString('es-AR')}
+                                </td>
+                                <td className="py-3 px-4 text-right font-extrabold text-slate-800">
+                                  ${item.subtotal?.toLocaleString('es-AR')}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Pie del Detalle y Resumen de Totales */}
+                <div className="pt-3 border-t border-gray-100 space-y-3 mt-auto shrink-0">
+                  <div className="flex justify-between items-center text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-gray-200">
+                    <span>Subtotal: <strong>${ventaSeleccionada.subtotal?.toLocaleString('es-AR')}</strong></span>
+                    {(ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento) > 0 && (
+                      <span className="text-emerald-700 font-bold">
+                        Descuento ({ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento}%): -${(((ventaSeleccionada.subtotal || 0) * (ventaSeleccionada.porcentaje_descuento || ventaSeleccionada.descuento || 0)) / 100).toLocaleString('es-AR')}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Botonera de Acciones */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button 
+                      onClick={() => setAccionModal('imprimir')}
+                      className="py-3 px-4 bg-gray-100 text-gray-700 font-bold rounded-xl border border-gray-200 hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 text-xs"
+                    >
+                      <Printer className="w-4 h-4 text-gray-600" />
+                      <span>🖨️ Imprimir Ticket</span>
+                    </button>
+
+                    <button 
+                      onClick={() => setAccionModal('reenviar')}
+                      className="py-3 px-4 bg-indigo-50 text-indigo-700 font-bold rounded-xl border border-indigo-200 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 text-xs"
+                    >
+                      <Send className="w-4 h-4 text-indigo-600" />
+                      <span>✉️ Reenviar Mail</span>
+                    </button>
+
+                    <button 
+                      onClick={() => setAccionModal('cancelar')}
+                      disabled={ventaSeleccionada.estado === 'Cancelada' || cargando}
+                      className={`py-3 px-4 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-xs shadow-sm ${
+                        ventaSeleccionada.estado === 'Cancelada' 
+                          ? 'bg-rose-50 text-rose-300 border border-rose-100 cursor-not-allowed' 
+                          : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200'
+                      }`}
+                    >
+                      {cargando ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Ban className="w-4 h-4" />
+                      )}
+                      <span>{cargando ? 'Cancelando...' : '🚫 Cancelar Venta'}</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
         </div>
+      )}
+
+      {/* Modal Dinámico de Confirmación */}
+      {accionModal && (
+        (() => {
+          const config = {
+            cancelar: {
+              titulo: '¿Cancelar esta venta?',
+              mensaje: 'Los artículos regresarán a tu stock. Esta acción no se puede deshacer.',
+              icono: '⚠️',
+              bgIcono: 'bg-rose-100 text-rose-500',
+              bgAlerta: 'bg-rose-50/50 border-rose-100 text-rose-700',
+              btnConfirmar: 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200',
+              textoBtn: 'Sí, Cancelar Venta'
+            },
+            imprimir: {
+              titulo: '¿Imprimir comprobante?',
+              mensaje: 'Se preparará el documento del ticket para enviarlo a tu impresora.',
+              icono: '🖨️',
+              bgIcono: 'bg-indigo-100 text-indigo-500',
+              bgAlerta: 'bg-indigo-50/50 border-indigo-100 text-indigo-700',
+              btnConfirmar: 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200',
+              textoBtn: 'Sí, Imprimir'
+            },
+            reenviar: {
+              titulo: '¿Reenviar comprobante?',
+              mensaje: 'Se enviará una copia del comprobante de esta venta por correo electrónico.',
+              icono: '✉️',
+              bgIcono: 'bg-blue-100 text-blue-500',
+              bgAlerta: 'bg-blue-50/50 border-blue-100 text-blue-700',
+              btnConfirmar: 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200',
+              textoBtn: 'Sí, Reenviar'
+            }
+          }[accionModal];
+
+          if (!config) return null;
+
+          const clienteNombre = ventaSeleccionada?.clientes?.nombreCompleto || ventaSeleccionada?.clientes?.nombre_completo || ventaSeleccionada?.cliente || 'Consumidor Final';
+
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm transition-opacity animate-in fade-in duration-150">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all animate-in zoom-in-95 duration-150 border border-gray-100">
+                
+                <div className="p-6 pb-4">
+                  <div className="flex items-center gap-4 mb-2">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${config.bgIcono}`}>
+                      <span className="text-2xl">{config.icono}</span>
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-extrabold text-gray-900">{config.titulo}</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Ticket de <span className="font-bold text-gray-800">{clienteNombre}</span>.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={`px-6 py-4 border-y ${config.bgAlerta}`}>
+                  <p className="text-sm font-medium text-center">{config.mensaje}</p>
+                </div>
+
+                <div className="p-6 flex justify-end gap-3 bg-gray-50">
+                  <button
+                    onClick={() => setAccionModal(null)}
+                    disabled={cargando}
+                    className="px-5 py-2.5 text-sm font-bold text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition-colors"
+                  >
+                    Atrás
+                  </button>
+                  <button
+                    onClick={handleConfirmarAccion}
+                    disabled={cargando}
+                    className={`px-5 py-2.5 text-sm font-bold rounded-xl shadow-md transition-colors flex items-center gap-2 ${config.btnConfirmar}`}
+                  >
+                    {cargando && accionModal === 'cancelar' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Procesando...</span>
+                      </>
+                    ) : (
+                      <span>{config.textoBtn}</span>
+                    )}
+                  </button>
+                </div>
+                
+              </div>
+            </div>
+          );
+        })()
       )}
     </div>
   );

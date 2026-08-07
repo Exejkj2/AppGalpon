@@ -254,13 +254,54 @@ export default function Productos() {
 
           if (Object.keys(datosAActualizar).length > 0) {
             actualizados++;
-            return supabase.from('productos').update(datosAActualizar).eq('id', match.id);
+            const precioVentaViejo = Number(match.precioBulto || match.precio_venta || match.precio || 0);
+            const precioVentaNuevo = datosAActualizar.precioBulto !== undefined ? Number(datosAActualizar.precioBulto) : precioVentaViejo;
+
+            const updateRes = await supabase.from('productos').update(datosAActualizar).eq('id', match.id);
+
+            if (opcionesImportacion.actualizarPrecio && precioVentaNuevo !== precioVentaViejo) {
+              const { error: errorHistorial } = await supabase.from('historial_compras').insert([{
+                producto_id: match.id,
+                nombre_producto: match.nombre,
+                precio_venta_anterior: precioVentaViejo,
+                precio_venta: precioVentaNuevo,
+                precio_costo: datosAActualizar.precioCompra || match.precioCompra || 0,
+                cantidad: 0
+              }]);
+
+              if (errorHistorial) {
+                console.error('Error al registrar variación en historial:', errorHistorial);
+              }
+            }
+
+            return updateRes;
           }
           return Promise.resolve();
         } else {
           if (opcionesImportacion.agregarNuevos) {
             agregados++;
-            return supabase.from('productos').insert([prod]);
+            const { data: nuevoProd, error: errNew } = await supabase
+              .from('productos')
+              .insert([prod])
+              .select()
+              .single();
+
+            if (!errNew && nuevoProd) {
+              const { error: errorHistorial } = await supabase.from('historial_compras').insert([{
+                producto_id: nuevoProd.id,
+                nombre_producto: nuevoProd.nombre,
+                cantidad: nuevoProd.stockBultos || prod.stockBultos || 0,
+                precio_costo: nuevoProd.precioCompra || prod.precioCompra || 0,
+                precio_venta: nuevoProd.precioBulto || prod.precioBulto || 0,
+                precio_venta_anterior: 0
+              }]);
+
+              if (errorHistorial) {
+                console.error('Error al registrar el ingreso inicial en historial:', errorHistorial);
+              }
+            }
+
+            return { data: nuevoProd, error: errNew };
           }
           return Promise.resolve();
         }
@@ -352,6 +393,11 @@ export default function Productos() {
 
     try {
       if (currentProduct.id) {
+        // Obtener precio anterior antes de actualizar
+        const prodExistente = productos.find((p) => p.id === currentProduct.id);
+        const precioVentaViejo = prodExistente ? Number(prodExistente.precioBulto || prodExistente.precio_venta || prodExistente.precio || 0) : 0;
+        const precioVentaNuevo = payload.precioBulto;
+
         // Update
         const { error } = await supabase
           .from('productos')
@@ -359,14 +405,54 @@ export default function Productos() {
           .eq('id', currentProduct.id);
         
         if (error) throw error;
+
+        // Registrar en historial_compras si hubo cambio en el precio de venta
+        if (precioVentaViejo > 0 && precioVentaNuevo !== precioVentaViejo) {
+          const { error: errorHistorial } = await supabase
+            .from('historial_compras')
+            .insert([{
+              producto_id: currentProduct.id,
+              nombre_producto: payload.nombre,
+              precio_venta_anterior: precioVentaViejo,
+              precio_venta: precioVentaNuevo,
+              precio_costo: payload.precioCompra || 0,
+              cantidad: 0
+            }]);
+
+          if (errorHistorial) {
+            console.error('Error al registrar variación en historial:', errorHistorial);
+          }
+        }
+
         toast.success('Producto actualizado correctamente');
       } else {
-        // Insert
-        const { error } = await supabase
+        // Insert de producto nuevo con .select().single() para obtener el registro creado
+        const { data: nuevoProducto, error: errorProducto } = await supabase
           .from('productos')
-          .insert([payload]);
+          .insert([payload])
+          .select()
+          .single();
         
-        if (error) throw error;
+        if (errorProducto) throw errorProducto;
+
+        // Registrar el "ingreso inicial" en el historial de compras
+        if (nuevoProducto) {
+          const { error: errorHistorial } = await supabase
+            .from('historial_compras')
+            .insert([{
+              producto_id: nuevoProducto.id,
+              nombre_producto: nuevoProducto.nombre,
+              cantidad: nuevoProducto.stockBultos || payload.stockBultos || 0,
+              precio_costo: nuevoProducto.precioCompra || payload.precioCompra || 0,
+              precio_venta: nuevoProducto.precioBulto || payload.precioBulto || 0,
+              precio_venta_anterior: 0
+            }]);
+
+          if (errorHistorial) {
+            console.error('Error al registrar el ingreso inicial en el historial:', errorHistorial);
+          }
+        }
+
         toast.success('Producto creado correctamente');
       }
 

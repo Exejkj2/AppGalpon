@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import DashboardLayout from './layouts/DashboardLayout';
 
 import Inicio from './pages/Inicio';
+import LoNuevo from './pages/LoNuevo';
 import Productos from './pages/Productos';
 import Clientes from './pages/Clientes';
 import Ventas from './pages/Ventas';
@@ -30,6 +31,7 @@ function App() {
         >
           {/* Sub-rutas inyectadas en el <Outlet /> de DashboardLayout */}
           <Route path="/inicio" element={<Inicio />} />
+          <Route path="/lo-nuevo" element={<LoNuevo />} />
           <Route path="/productos" element={<Productos />} />
           <Route path="/clientes" element={<Clientes />} />
           <Route path="/ventas" element={<Ventas />} />

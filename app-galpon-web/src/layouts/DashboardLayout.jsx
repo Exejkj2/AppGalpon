@@ -12,7 +12,8 @@ import {
   Menu, 
   X,
   Candy,
-  FileText
+  FileText,
+  Sparkles
 } from 'lucide-react';
 
 export default function DashboardLayout() {
@@ -24,6 +25,7 @@ export default function DashboardLayout() {
 
   const navItems = [
     { to: '/inicio', icon: Home, label: 'Inicio' },
+    { to: '/lo-nuevo', icon: Sparkles, label: 'Lo Nuevo' },
     { to: '/productos', icon: Package, label: 'Productos' },
     { to: '/clientes', icon: Users, label: 'Clientes' },
     { to: '/ventas', icon: ShoppingCart, label: 'Ventas' },
@@ -45,7 +47,7 @@ export default function DashboardLayout() {
         </div>
       </div>
       
-      <nav className="flex-1 px-3 py-6 space-y-2 overflow-y-auto overflow-x-hidden">
+      <nav className="flex-1 px-3 py-6 space-y-2 overflow-y-auto overflow-x-hidden no-scrollbar">
         {navItems.map((item) => (
           <NavLink
             key={item.to}

@@ -21,9 +21,15 @@ export default function HistorialCompras() {
   const [historialRaw, setHistorialRaw] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(
-    new Date().toISOString().split('T')[0]
-  );
+  const getFechaLocalHoy = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(getFechaLocalHoy);
   const [searchTerm, setSearchTerm] = useState('');
   const [loteSeleccionadoId, setLoteSeleccionadoId] = useState(null);
 
@@ -32,14 +38,15 @@ export default function HistorialCompras() {
     setLoading(true);
     setError(null);
     try {
-      const inicioDelDia = `${fechaSeleccionada}T00:00:00.000Z`;
-      const finDelDia = `${fechaSeleccionada}T23:59:59.999Z`;
+      const [year, month, day] = fechaSeleccionada.split('-').map(Number);
+      const startOfDay = new Date(year, month - 1, day, 0, 0, 0, 0);
+      const endOfDay = new Date(year, month - 1, day, 23, 59, 59, 999);
 
       const { data, error } = await supabase
         .from('historial_compras')
         .select('*')
-        .gte('created_at', inicioDelDia)
-        .lte('created_at', finDelDia)
+        .gte('created_at', startOfDay.toISOString())
+        .lte('created_at', endOfDay.toISOString())
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -54,8 +61,8 @@ export default function HistorialCompras() {
 
         const filtradosLocal = (fallbackData || []).filter((item) => {
           if (!item.created_at) return false;
-          const fechaItem = new Date(item.created_at).toISOString().split('T')[0];
-          return fechaItem === fechaSeleccionada;
+          const itemDate = new Date(item.created_at);
+          return itemDate >= startOfDay && itemDate <= endOfDay;
         });
 
         setHistorialRaw(filtradosLocal);
