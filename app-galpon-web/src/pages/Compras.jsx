@@ -260,7 +260,8 @@ export default function Compras() {
             nombre_producto: item.producto.nombre,
             cantidad: item.cantidad,
             precio_costo: item.costo,
-            precio_venta: item.venta
+            precio_venta: item.venta,
+            precio_venta_anterior: item.producto.precioBulto || item.producto.precio || item.producto.precio_venta || 0
           }]);
 
         if (errorInsert) {
